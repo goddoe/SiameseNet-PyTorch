@@ -28,6 +28,10 @@ parser.add_argument('--n-workers',
                     type=int,
                     help='the number of dataloader worker',
                     default=4)
+parser.add_argument('--n-pairs',
+                    type=int,
+                    help='the number of trainig pairs',
+                    default=30000)
 parser.add_argument('--use-cuda',
                     action='store_true',
                     help='cuda')
@@ -147,7 +151,7 @@ trainset = torchvision.datasets.Omniglot(
     download=True,
     transform=torchvision.transforms.ToTensor()
 )
-trainset_pair = PairDataset(trainset)
+trainset_pair = PairDataset(trainset, n_pairs=args.n_pairs)
 train_loader = DataLoader(trainset_pair,
                           batch_size=args.batch_size,
                           shuffle=True,
