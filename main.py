@@ -1,9 +1,9 @@
 from collections import defaultdict
 import random
+import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,8 +11,28 @@ from torch import optim
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
-
 from tqdm import tqdm
+
+###############################
+# Args parser
+parser = argparse.ArgumentParser(description='Training SiameseNet')
+parser.add_argument('--n-epoch',
+                    type=int,
+                    help='number of epoch',
+                    default=10)
+parser.add_argument('--batch-size',
+                    type=int,
+                    help='batch size',
+                    default=64)
+parser.add_argument('--n-workers',
+                    type=int,
+                    help='the number of dataloader worker',
+                    default=4)
+parser.add_argument('--use-cuda',
+                    action='store_true',
+                    help='cuda')
+
+args = parser.parse_args()
 
 
 # ======================================
@@ -135,9 +155,9 @@ trainset_pair = PairDataset(trainset)
 
 
 train_loader = DataLoader(trainset_pair,
-                          batch_size=64,
+                          batch_size=args.batch_size,
                           shuffle=True,
-                          num_workers=4,
+                          num_workers=args.n_workers,
                           collate_fn=collate_fn)
 
 
@@ -148,7 +168,6 @@ model = SiameseNet()
 criterion = nn.BCEWithLogitsLoss(reduction='mean')
 optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-n_epoch = 5
 
 # ======================================
 # Loggig
@@ -157,24 +176,31 @@ global_i = 0
 writer = SummaryWriter(f"tensorboard/exp_1")
 
 # Use cuda
-use_cuda = True
-if use_cuda:
+if args.use_cuda:
     model.cuda()
 
 # ======================================
 # Training
 verbose_interval = 10
 
-pbar = tqdm(range(n_epoch))
+pbar = tqdm(range(args.n_epoch))
 for epoch_i in pbar:
     for batch_i, batch in enumerate(train_loader):
         optimizer.zero_grad()
+        src = batch['img1'].unsqueeze(1)
+        trg = batch['img2'].unsqueeze(1)
+        is_same = batch['is_same']
 
-        logit = model(src=batch['img1'].unsqueeze(1).cuda(),
-                      trg=batch['img2'].unsqueeze(1).cuda())
+        if args.use_cuda:
+            src = src.cuda()
+            trg = trg.cuda()
+            is_same = is_same.cuda()
+
+        logit = model(src=src,
+                      trg=trg)
 
         loss = criterion(logit.flatten(),
-                         batch['is_same'].cuda())
+                         is_same)
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
@@ -191,6 +217,8 @@ for epoch_i in pbar:
 
 n_category = 20
 n_query = 40
+
+print(f"Evaluating with a {n_category}-way within-alphabet classification task.")
 
 testset = torchvision.datasets.Omniglot(
     root="./data",
@@ -236,7 +264,7 @@ for query in query_set:
             if cat_i_c == cat_i_q and sample_i_q == sample_i_c:
                 continue
             trg = trg.unsqueeze(0)
-            if use_cuda:
+            if args.use_cuda:
                 trg = trg.cuda()
             logit = model(src=src,
                           trg=trg)
