@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
 from torch.utils.data import Dataset, DataLoader
-
+from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
 from tqdm import tqdm
@@ -23,19 +23,19 @@ class CNN(nn.Module):
     def __init__(self, ):
         super(CNN, self).__init__()
 
-        self.stem = nn.Sequential(nn.Conv2d(1, 64, 10, padding_mode='valid'),
+        self.stem = nn.Sequential(nn.Conv2d(1, 64, 10),
                                   nn.ReLU(),
                                   nn.MaxPool2d(2),
 
-                                  nn.Conv2d(64, 128, 7, padding_mode='valid'),
+                                  nn.Conv2d(64, 128, 7),
                                   nn.ReLU(),
                                   nn.MaxPool2d(2),
 
-                                  nn.Conv2d(128, 128, 4, padding_mode='valid'),
+                                  nn.Conv2d(128, 128, 4),
                                   nn.ReLU(),
                                   nn.MaxPool2d(2),
 
-                                  nn.Conv2d(128, 256, 4, padding_mode='valid'),
+                                  nn.Conv2d(128, 256, 4),
                                   nn.ReLU(),
 
                                   nn.Flatten(),  # (B, 9216)
@@ -120,6 +120,7 @@ def collate_fn(batch):
             data[key].append(item[key])
     data['img1'] = torch.cat(data['img1'])
     data['img2'] = torch.cat(data['img2'])
+    data['is_same'] = torch.tensor(data['is_same'], dtype=torch.float)
     return data
 
 # ======================================
@@ -130,21 +131,15 @@ trainset = torchvision.datasets.Omniglot(
     download=True,
     transform=torchvision.transforms.ToTensor()
 )
-
-testset = torchvision.datasets.Omniglot(
-    root="./data",
-    background=False,
-    download=True,
-    transform=torchvision.transforms.ToTensor())
-
 trainset_pair = PairDataset(trainset)
 
 
 train_loader = DataLoader(trainset_pair,
-                          batch_size=32,
+                          batch_size=64,
                           shuffle=True,
                           num_workers=4,
                           collate_fn=collate_fn)
+
 
 # ======================================
 # Define model, loss function, hyper-parameters
@@ -154,57 +149,103 @@ criterion = nn.BCEWithLogitsLoss(reduction='mean')
 optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
 n_epoch = 5
-batch_size = 32
 
+# ======================================
+# Loggig
+
+global_i = 0
+writer = SummaryWriter(f"tensorboard/exp_1")
+
+# Use cuda
+use_cuda = True
+if use_cuda:
+    model.cuda()
 
 # ======================================
 # Training
 verbose_interval = 10
 
-for epoch_i in tqdm(range(n_epoch)):
-    pbar = tqdm(enumerate(train_loader))
-    for batch_i, batch in pbar:
+pbar = tqdm(range(n_epoch))
+for epoch_i in pbar:
+    for batch_i, batch in enumerate(train_loader):
         optimizer.zero_grad()
 
-        logit = model(src=batch['img1'].unsqueeze(1),
-                      trg=batch['img2'].unsqueeze(1))
+        logit = model(src=batch['img1'].unsqueeze(1).cuda(),
+                      trg=batch['img2'].unsqueeze(1).cuda())
 
         loss = criterion(logit.flatten(),
-                         torch.tensor(batch['is_same'], dtype=torch.float))
+                         batch['is_same'].cuda())
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
         optimizer.step()
 
-        pbar.set_description(f"loss {loss.item()}")
+        pbar.set_description(f"{epoch_i}th epoch, {batch_i}th batch, loss: {loss.item()}")
+
+        writer.add_scalar("loss", loss.item(), global_i)
+        global_i += 1
 
 
 # ======================================
-# snippets
-"""
+# One-shot Learning, Naive Evaluation
 
-it = iter(train_loader)
-sample = next(it)
+n_category = 20
+n_query = 40
 
+testset = torchvision.datasets.Omniglot(
+    root="./data",
+    background=False,
+    download=True,
+    transform=torchvision.transforms.ToTensor())
 
-print(type(image))  # torch.Tensor
-print(type(label))  # int
-
-plt.ion()
-plt.show()
-for image, label in testset:
-    plt.imshow(image.squeeze())
-    plt.title(label)
-    plt.show()
-    plt.pause(1)
-
-
-# data analysis
-train_label_image_dict = defaultdict(lambda: [])
-for image, label in trainset:
-    train_label_image_dict[label].append(image)
-
+# group by label
 test_label_image_dict = defaultdict(lambda: [])
 for image, label in testset:
     test_label_image_dict[label].append(image)
-"""
+
+# Choose fore 20 categories
+new_test_label_image_dict = {}
+i_cat = 0
+for key, val in test_label_image_dict.items():
+    new_test_label_image_dict[key] = val
+    i_cat += 1
+    if i_cat >= n_category:
+        break
+test_label_image_dict = new_test_label_image_dict
+
+# Choose quires
+query_set = []
+for i in range(n_query):
+    category_idx = random.randint(0, len(test_label_image_dict)-1)
+    sample_idx = random.randint(0, len(test_label_image_dict[category_idx])-1)
+    query_set.append((category_idx, sample_idx))
+
+
+# Evaluate
+correct = 0
+for query in query_set:
+    cat_i_q, sample_i_q = query
+
+    src = torch.tensor(test_label_image_dict[cat_i_q][sample_i_q])
+    src = src.unsqueeze(0)
+    src = src.cuda()
+
+    max_sim = 0
+    for cat_i_c, img_list in test_label_image_dict.items():
+        for sample_i_c, trg in enumerate(img_list):
+            if cat_i_c == cat_i_q and sample_i_q == sample_i_c:
+                continue
+            trg = trg.unsqueeze(0)
+            if use_cuda:
+                trg = trg.cuda()
+            logit = model(src=src,
+                          trg=trg)
+            similarity = torch.sigmoid(logit).flatten()
+            if similarity.item() > max_sim:
+                max_sim = similarity.item()
+                answer = cat_i_c
+    if cat_i_q == answer:
+        correct += 1
+
+accuracy = correct/n_query
+print(f"accuracy: {accuracy}")
