@@ -173,7 +173,6 @@ if args.use_cuda:
 
 # ======================================
 # Training
-verbose_interval = 10
 pbar = tqdm(range(args.n_epoch))
 for epoch_i in pbar:
     for batch_i, batch in enumerate(train_loader):
