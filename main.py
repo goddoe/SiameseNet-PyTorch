@@ -37,12 +37,10 @@ args = parser.parse_args()
 
 # ======================================
 # Modeling
-
 class CNN(nn.Module):
 
     def __init__(self, ):
         super(CNN, self).__init__()
-
         self.stem = nn.Sequential(nn.Conv2d(1, 64, 10),
                                   nn.ReLU(),
                                   nn.MaxPool2d(2),
@@ -70,7 +68,6 @@ class SiameseNet(nn.Module):
 
     def __init__(self, ):
         super(SiameseNet, self).__init__()
-
         self.stem = CNN()
         self.linear = nn.Linear(4096, 1)
 
@@ -81,11 +78,9 @@ class SiameseNet(nn.Module):
 
 # ======================================
 # Dataset
-
 class PairDataset(Dataset):
 
     def __init__(self, dataset, n_pairs=30000, same_ratio=0.5):
-
         self.n_pairs = n_pairs
         self.same_ratio = same_ratio
 
@@ -143,6 +138,7 @@ def collate_fn(batch):
     data['is_same'] = torch.tensor(data['is_same'], dtype=torch.float)
     return data
 
+
 # ======================================
 # Loading Data
 trainset = torchvision.datasets.Omniglot(
@@ -152,8 +148,6 @@ trainset = torchvision.datasets.Omniglot(
     transform=torchvision.transforms.ToTensor()
 )
 trainset_pair = PairDataset(trainset)
-
-
 train_loader = DataLoader(trainset_pair,
                           batch_size=args.batch_size,
                           shuffle=True,
@@ -163,7 +157,6 @@ train_loader = DataLoader(trainset_pair,
 
 # ======================================
 # Define model, loss function, hyper-parameters
-
 model = SiameseNet()
 criterion = nn.BCEWithLogitsLoss(reduction='mean')
 optimizer = optim.Adam(model.parameters(), lr=1e-4)
@@ -171,7 +164,6 @@ optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
 # ======================================
 # Loggig
-
 global_i = 0
 writer = SummaryWriter(f"tensorboard/exp_1")
 
@@ -182,15 +174,14 @@ if args.use_cuda:
 # ======================================
 # Training
 verbose_interval = 10
-
 pbar = tqdm(range(args.n_epoch))
 for epoch_i in pbar:
     for batch_i, batch in enumerate(train_loader):
         optimizer.zero_grad()
+
         src = batch['img1'].unsqueeze(1)
         trg = batch['img2'].unsqueeze(1)
         is_same = batch['is_same']
-
         if args.use_cuda:
             src = src.cuda()
             trg = trg.cuda()
@@ -207,17 +198,14 @@ for epoch_i in pbar:
         optimizer.step()
 
         pbar.set_description(f"{epoch_i}th epoch, {batch_i}th batch, loss: {loss.item()}")
-
         writer.add_scalar("loss", loss.item(), global_i)
         global_i += 1
 
 
 # ======================================
 # One-shot Learning, Naive Evaluation
-
 n_category = 20
 n_query = 40
-
 print(f"Evaluating with a {n_category}-way within-alphabet classification task.")
 
 testset = torchvision.datasets.Omniglot(
@@ -250,8 +238,9 @@ for i in range(n_query):
 
 
 # Evaluate
+print("evaluatating...")
 correct = 0
-for query in query_set:
+for query in tqdm(query_set):
     cat_i_q, sample_i_q = query
 
     src = torch.tensor(test_label_image_dict[cat_i_q][sample_i_q])
@@ -274,6 +263,8 @@ for query in query_set:
                 answer = cat_i_c
     if cat_i_q == answer:
         correct += 1
+print("done.")
 
-accuracy = correct/n_query
+print("*" * 30)
+accuracy = correct / n_query
 print(f"accuracy: {accuracy}")
